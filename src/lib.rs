@@ -16,7 +16,7 @@ fn impl_vtable(ast: &syn::DeriveInput) -> TokenStream {
     let gen = quote! {
         impl VTable for #name {
             unsafe fn get_virtual<T: Sized>(&self, index: usize) -> T {
-                (self.vtable.add(index) as *const T).read()
+                ((self.vtable as *mut *mut usize).add(index) as *const T).read()
             }
         }
     };
@@ -37,6 +37,22 @@ pub fn has_vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = &parsed.attrs;
     let fields = &parsed.fields.iter().collect::<Vec<_>>();
     let vis = &parsed.vis;
+
+    let vtable = fields.iter().find(|field| {
+        if let Some(ident) = &field.ident {
+            println!("{}", ident.to_string());
+            return &ident.to_string() == "vtable";
+        }
+        false
+    });
+
+    if let Some(_) = vtable {
+        let gen = quote! {
+            #parsed
+        };
+
+        return gen.into();
+    }
 
     // Adds #[repr(C)] so we don't accidentally fuck up the padding.
     // Adds the necessary vtable field as first element
