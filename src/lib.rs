@@ -40,7 +40,6 @@ pub fn has_vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let vtable = fields.iter().find(|field| {
         if let Some(ident) = &field.ident {
-            println!("{}", ident.to_string());
             return &ident.to_string() == "vtable";
         }
         false
