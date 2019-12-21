@@ -26,8 +26,7 @@ fn impl_vtable(ast: &syn::DeriveInput) -> TokenStream {
 
 #[proc_macro_derive(VTable)]
 pub fn vtable_derive(input: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(input).unwrap();
-    impl_vtable(&ast)
+    let ast = parse_macro_input!(input as DeriveInput);
 }
 
 #[proc_macro_attribute]
