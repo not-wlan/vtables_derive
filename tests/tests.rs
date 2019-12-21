@@ -79,3 +79,40 @@ fn virtual_index_retains_declared_methods() {
     verify!(ExecuteClientCmd, command);
     verify!(ClientCmd_Unrestricted, command);
 }
+
+#[test]
+fn calling_void_virtual_method_works() {
+    use ptr::null_mut as null;
+    const WIDTH_ASSERT: i32 = 800;
+    const HEIGHT_ASSERT: i32 = 600;
+
+    unsafe fn get_screen_size_impl(_client: &EngineClient, width: *mut i32, height: *mut i32) {
+        *width = WIDTH_ASSERT;
+        *height = HEIGHT_ASSERT;
+    }
+
+    let function_ptr = get_screen_size_impl as *mut usize;
+
+    let mut vtable = [
+        null(),         // 0
+        null(),         // 1
+        null(),         // 2
+        null(),         // 3
+        null(),         // 4
+        function_ptr,   // 5
+        null(),
+        null(),
+        // and so on.
+    ];
+
+    let engine_client = EngineClient {
+        vtable: vtable.as_mut_ptr(),
+    };
+
+    let mut width = 0;
+    let mut height = 0;
+    engine_client.GetScreenSize(&mut width, &mut height);
+ 
+    assert_eq!(width, WIDTH_ASSERT);
+    assert_eq!(height, HEIGHT_ASSERT);
+}
