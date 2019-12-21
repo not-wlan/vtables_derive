@@ -15,3 +15,7 @@ quote = "1.0"
 [dependencies.syn]
 version = "1.0"
 features = ["full"]
+
+[dev-dependencies]
+static_assertions = "1"
+vtables = { path = "../vtables" }
