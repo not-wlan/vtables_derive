@@ -145,3 +145,25 @@ fn call_virtual_method_to_return_internal_field() {
 
     assert_eq!(engine_client.GetTestField(), FIELD_ASSERT);
 }
+
+#[test]
+fn call_virtual_method_to_mutate_internal_field() {
+    const FIELD_ASSERT: u64 = 0xDeadBeef;
+
+    fn mutate_test_field_impl(client: &mut EngineClient, new_value: u64) {
+        client.test_field = new_value;
+    }
+
+    let mut vtable = new_vtable_with_one_function(1, mutate_test_field_impl as _);
+
+    let mut engine_client = EngineClient {
+        vtable: vtable.as_mut_ptr(),
+        test_field: 0,
+    };
+
+    assert_eq!(engine_client.test_field, 0);
+
+    engine_client.MutateTestField(FIELD_ASSERT);
+
+    assert_eq!(engine_client.test_field, FIELD_ASSERT);
+}
