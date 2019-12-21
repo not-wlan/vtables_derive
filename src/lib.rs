@@ -12,8 +12,8 @@ use syn::{
     DeriveInput, ExprLit, FnArg, ItemFn, ItemStruct, Lit, Pat, Result, Type,
 };
 
-fn impl_vtable(ast: &syn::DeriveInput) -> TokenStream {
-    let name = &ast.ident;
+fn impl_vtable(ast: syn::DeriveInput) -> TokenStream {
+    let name = ast.ident;
     let gen = quote! {
         impl VTable for #name {
             unsafe fn get_virtual<T: Sized>(&self, index: usize) -> T {
@@ -27,6 +27,7 @@ fn impl_vtable(ast: &syn::DeriveInput) -> TokenStream {
 #[proc_macro_derive(VTable)]
 pub fn vtable_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
+    impl_vtable(ast)
 }
 
 #[proc_macro_attribute]
