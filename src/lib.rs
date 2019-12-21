@@ -145,3 +145,6 @@ pub fn virtual_index(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     gen.into()
 }
+
+#[cfg(test)]
+mod tests;
