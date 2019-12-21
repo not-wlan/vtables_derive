@@ -1,3 +1,4 @@
+#![warn(clippy::pedantic)]
 #![allow(dead_code)]
 
 use core::ptr;
@@ -9,6 +10,7 @@ use vtables_derive::{has_vtable, virtual_index, VTable};
 #[has_vtable]
 #[derive(VTable, Debug)]
 struct EngineClient {
+    test_field: u64,
 }
 
 // This structure will fail to compile if #[has_vtable] added another `vtable` field.
@@ -20,8 +22,23 @@ struct AlreadyHasVTableField<'a> {
     baz: Option<&'a u8>,
 }
 
+impl Default for EngineClient {
+    fn default() -> Self {
+        Self {
+            vtable: ptr::null_mut(),
+            test_field: 0,
+        }
+    }
+}
+
 #[allow(non_snake_case)]
 impl EngineClient {
+    #[virtual_index(0)]
+    pub fn GetTestField(&self) -> u64 {}
+
+    #[virtual_index(1)]
+    pub fn MutateTestField(&mut self, new_value: u64) {}
+
     #[virtual_index(5)]
     pub fn GetScreenSize(&self, width: *mut i32, height: *mut i32) {}
     
@@ -33,12 +50,12 @@ impl EngineClient {
 
     #[virtual_index(113)]
     pub fn ClientCmd_Unrestricted(&self, command: *const c_char) {}
+
 }
 
 #[test]
 fn has_vtable_adds_vtable_field() {
     // This function will fail to compile if #[has_vtable] does not add a `vtable`.
-    
     sa::assert_fields!(EngineClient: vtable);
 }
 
@@ -46,9 +63,7 @@ fn has_vtable_adds_vtable_field() {
 fn derive_vtable_adds_get_virtual_method() {
     // This function will fail to compile if #[derive(VTable)] did not add a `get_virtual(usize)` method.
     
-    let engine_client = EngineClient {
-        vtable: ptr::null_mut(),
-    };
+    let engine_client = EngineClient::default();
 
     let _f = |i| {
         type ExampleVirtualMethod = fn(&EngineClient, bool) -> f64;
@@ -60,9 +75,7 @@ fn derive_vtable_adds_get_virtual_method() {
 fn virtual_index_retains_declared_methods() {
     // This function will fail to compile if #[virtual_index(...)] fails to emit the method it decorates.
     
-    let engine_client = EngineClient {
-        vtable: ptr::null_mut(),
-    };
+    let engine_client = EngineClient::default();
 
     macro_rules! verify {
         ($method:ident) => {{
@@ -80,9 +93,18 @@ fn virtual_index_retains_declared_methods() {
     verify!(ClientCmd_Unrestricted, command);
 }
 
+fn new_vtable_with_one_function(function_index: usize, function_pointer: *mut usize) -> Vec<*mut usize> {
+    // [null, null, null, ..., function_pointer, null, ...]
+    //   0     1     2          function_index   NUM_NULL_ENTRIES_AFTER_FUNCTION
+    const NUM_NULL_ENTRIES_AFTER_FUNCTION: usize = 3;
+    let num_total_entries = 1 + function_index + NUM_NULL_ENTRIES_AFTER_FUNCTION;
+    let mut vtable = vec![ptr::null_mut(); num_total_entries];
+    vtable[function_index] = function_pointer;
+    vtable
+}
+
 #[test]
-fn calling_void_virtual_method_works() {
-    use ptr::null_mut as null;
+fn call_void_virtual_method() {
     const WIDTH_ASSERT: i32 = 800;
     const HEIGHT_ASSERT: i32 = 600;
 
@@ -91,22 +113,11 @@ fn calling_void_virtual_method_works() {
         *height = HEIGHT_ASSERT;
     }
 
-    let function_ptr = get_screen_size_impl as *mut usize;
-
-    let mut vtable = [
-        null(),         // 0
-        null(),         // 1
-        null(),         // 2
-        null(),         // 3
-        null(),         // 4
-        function_ptr,   // 5
-        null(),
-        null(),
-        // and so on.
-    ];
+    let mut vtable = new_vtable_with_one_function(5, get_screen_size_impl as _);
 
     let engine_client = EngineClient {
         vtable: vtable.as_mut_ptr(),
+        ..Default::default()
     };
 
     let mut width = 0;
@@ -115,4 +126,22 @@ fn calling_void_virtual_method_works() {
  
     assert_eq!(width, WIDTH_ASSERT);
     assert_eq!(height, HEIGHT_ASSERT);
+}
+
+#[test]
+fn call_virtual_method_to_return_internal_field() {
+    const FIELD_ASSERT: u64 = 0xCafeBabe;
+
+    fn get_test_field_impl(client: &EngineClient) -> u64 {
+        client.test_field
+    }
+
+    let mut vtable = new_vtable_with_one_function(0, get_test_field_impl as _);
+
+    let engine_client = EngineClient {
+        vtable: vtable.as_mut_ptr(),
+        test_field: FIELD_ASSERT
+    };
+
+    assert_eq!(engine_client.GetTestField(), FIELD_ASSERT);
 }
