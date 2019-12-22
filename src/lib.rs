@@ -46,18 +46,22 @@ fn add_vtable_field(item_struct: &mut ItemStruct) {
         panic!("You can only decorate with #[has_vtable] a struct that has named fields.");
     };
 
-    let vtable_field = Field::parse_named
-        .parse2(quote! { pub vtable: *mut *mut usize })
-        .expect("internal macro error with ill-formatted vtable field");
-    
     let struct_already_has_vtable_field = fields
-        .named
-        .iter()
-        .any(|f| f.ident == vtable_field.ident);
-
+    .named
+    .iter()
+    .any(|f| f
+        .ident
+        .as_ref()
+        .map_or(false, |i| i == "vtable")
+    );
+    
     if struct_already_has_vtable_field {
         return;
     }
+    
+    let vtable_field = Field::parse_named
+        .parse2(quote! { pub vtable: *mut *mut usize })
+        .expect("internal macro error with ill-formatted vtable field");
 
     fields
         .named
