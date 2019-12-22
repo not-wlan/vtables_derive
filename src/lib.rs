@@ -11,9 +11,8 @@ use syn::{
     self,
     parse::{Parse, Parser, ParseStream},
     parse_macro_input,
-    parse_quote,
     spanned::Spanned,
-    Attribute, AttrStyle, DeriveInput, ExprLit, Field, FnArg, ItemFn, ItemStruct, Lit, Meta, MetaList, NestedMeta, Pat, Path, Result, Type,
+    Attribute, DeriveInput, ExprLit, Field, FnArg, ItemFn, ItemStruct, Lit, Meta, MetaList, NestedMeta, Pat, Result, Type,
     Fields::Named,
 };
 
@@ -73,8 +72,7 @@ fn has_repr_c(item_struct: &ItemStruct) -> bool {
     let has = |meta: &Meta, ident| meta
         .path()
         .get_ident()
-        .map(|i| i.to_string() == ident)
-        .unwrap_or(false);
+        .map_or(false, |i| i == ident);
 
     item_struct
         .attrs
