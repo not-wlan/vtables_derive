@@ -1,9 +1,16 @@
 #![warn(clippy::pedantic)]
 #![allow(dead_code)]
 
-use core::ptr;
+use core::{
+    ops::{Mul, Deref, Div},
+    ptr,
+};
 use static_assertions as sa;
-use std::os::raw::*;
+use std::{
+    borrow::Cow,
+    fmt::Display,
+    os::raw::*,
+};
 use vtables::VTable;
 use vtables_derive::{has_vtable, virtual_index, VTable};
 
@@ -12,6 +19,58 @@ use vtables_derive::{has_vtable, virtual_index, VTable};
 struct EngineClient {
     test_field: u64,
 }
+
+// ================================================================================================
+// These structures will fail to compile if #[derive(VTable)] does not respect
+// their generics.
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimes<'a, 'b, 'c> {
+    field_with_lifetime_a: Option<&'a u32>,
+    field_with_lifetime_b: Cow<'b, str>,
+    field_with_lifetime_c: &'c f64,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithTypeGenerics<T, U, V> {
+    t: T,
+    u: U,
+    v: V,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimesAndGenerics<'a, 'b, 'c, T, U, V: Clone> {
+    t: &'a T,
+    u: Option<&'b U>,
+    v: Cow<'c, V>,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimesAndGenericsAndVTableField<'a, 'b, 'c, T, U, V: Clone> {
+    t: &'a T,
+    u: Option<&'b U>,
+    vtable: usize,
+    v: Cow<'c, V>,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimesAndGenericsAndVTableFieldAndWhereClause<'a, 'b, 'c, T, U, V>
+where
+    T: Mul + Div,
+    U: AsRef<str> + Copy,
+    V: Deref<Target=T> + Clone + Send + Sync + Display,
+{
+    t: &'a T,
+    u: Option<&'b U>,
+    vtable: usize,
+    v: Cow<'c, V>,
+}
+// ================================================================================================
 
 // This structure will fail to compile if #[has_vtable] added another `vtable` field.
 #[has_vtable]
@@ -50,7 +109,6 @@ impl EngineClient {
 
     #[virtual_index(113)]
     pub fn ClientCmd_Unrestricted(&self, command: *const c_char) {}
-
 }
 
 #[test]
@@ -166,4 +224,157 @@ fn call_virtual_method_to_mutate_internal_field() {
     engine_client.MutateTestField(FIELD_ASSERT);
 
     assert_eq!(engine_client.test_field, FIELD_ASSERT);
+}
+
+#[test]
+fn check_that_derive_vtable_adds_repr_c() {
+    // To be honest, this test is flaky because it relies on struct layouts
+    // whose stability I'm not familiar with across platforms, rustc versions, etc.
+    // Ideally, there'd be a simpler way to just check if a struct is literally
+    // decorated with the #[repr(C)] attribute rather than going through this dance of looking for
+    // the effects of the attribute.
+
+    // Anyway, here's the theory:
+    // If #[has_vtable] didn't add #[repr(C)] to the struct,
+    // then we'd expect to see the Rust compiler laying out the fields according to #[repr(rust)].
+    // This default layout should order the fields of the struct in decreasing alignment to minimize padding.
+    // With that knowledge, we can probe the struct using raw pointers to look for the unique values we initialize
+    // each field with.
+    // https://github.com/rust-lang/rust/pull/37429
+
+    macro_rules! z { 
+        ($t:ty) => {{ 
+            core::mem::size_of::<$t>() 
+        }} 
+    }
+
+    {
+        // First, test the theory on an undecorated struct.
+        struct Control {
+            least_aligned: u8,
+            somewhat_aligned: u16,
+            most_aligned: u32,
+        }
+        
+        let control = Control {
+            least_aligned: 42,
+            somewhat_aligned: 2019,
+            most_aligned: 0xCafeBabe,
+        };
+
+        /*
+            We expect the Rust compiler to layout `control` in memory as:
+
+            +0: 0xCafeBabe
+            +4: 2019
+            +6: 42
+            +7: 1 byte padding to satisfy alignment constraint of the entire struct.
+
+            i.e., decreasing alignment
+        */
+
+        unsafe {
+            // Verify the fields are in fact laid out in decreasing alignment.
+            let cursor = &control as *const _ as *const u8;
+            let mut offset = 0;
+
+            {
+                let cursor: *const u32 = cursor.add(offset).cast();
+                assert_eq!(*cursor, control.most_aligned);
+                offset += z!(u32);
+            }
+
+            {
+                let cursor: *const u16 = cursor.add(offset).cast();
+                assert_eq!(*cursor, control.somewhat_aligned);
+                offset += z!(u16);
+            }
+            
+            {
+                let cursor: *const u8 = cursor.add(offset).cast();
+                assert_eq!(*cursor, control.least_aligned);
+                offset += z!(u8);
+            }
+
+            // 1 byte padding to align entire struct to a multiple of maximum alignment.
+            offset += 1;
+
+            assert_eq!(z!(Control), offset);
+        }
+    }
+
+    // Great, those tests passed. So the theory is okay to work with.
+    // Now let's decorate a struct with #[has_vtable] to see if it has the #[repr(C)] attribute.
+    // We shouldn't see any of the struct fields moving from their declaration order.
+
+    #[has_vtable]
+    #[derive(VTable)]
+    struct Control {
+        vtable: usize,
+
+        least_aligned: u8,
+        somewhat_aligned: u16,
+        most_aligned: u32,
+    }
+
+    let control = Control {
+        vtable: 0,
+
+        least_aligned: 42,
+        somewhat_aligned: 2019,
+        most_aligned: 0xCafeBabe,
+    };
+
+    /*
+        We expect #[repr(C)] to layout `control` in memory as:
+
+        +0:     0
+
+        +8:     42
+        +9:     1 byte padding to satisfy alignment requirement of 2 bytes for `somewhat_aligned`
+        +10:    2019
+        +12:    0xCafeBabe
+
+        i.e., declaration order with padding to satisfy alignment requirements
+    */
+
+    unsafe {
+        // Verify the fields are in declaration order.
+        let cursor = &control as *const _ as *const u8;
+        let mut offset = z!(usize); // skip past vtable usize
+
+        {
+            let cursor: *const u8 = cursor.add(offset).cast();
+            assert_eq!(*cursor, control.least_aligned);
+            offset += z!(u8);
+        }
+
+        {
+            offset += 1; // 1 byte padding
+            let cursor: *const u16 = cursor.add(offset).cast();
+            assert_eq!(*cursor, control.somewhat_aligned);
+            offset += z!(u16);
+        }
+        
+        {
+            let cursor: *const u32 = cursor.add(offset).cast();
+            assert_eq!(*cursor, control.most_aligned);
+            offset += z!(u32);
+        }
+        
+        assert_eq!(z!(Control), offset);
+    }
+
+    // Sanity check on alignment ordering.
+    
+    macro_rules! a { 
+        ($t:ty) => {{ 
+            core::mem::align_of::<$t>() 
+        }} 
+    }
+
+    let alignments = [a!(u8), a!(u16), a!(u32)];
+
+    assert_eq!(*alignments.iter().min().unwrap(), a!(u8), "u8 should have the smallest alignment constraint.");
+    assert_eq!(*alignments.iter().max().unwrap(), a!(u32), "u32 should have the largest alignment constraint.");
 }
