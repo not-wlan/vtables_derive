@@ -2,14 +2,19 @@
 extern crate proc_macro;
 
 use crate::proc_macro::TokenStream;
-use quote::quote;
+use quote::{
+    quote,
+    ToTokens,
+};
 use std::ops::Deref;
 use syn::{
     self,
-    parse::{Parse, ParseStream},
+    parse::{Parse, Parser, ParseStream},
     parse_macro_input,
+    parse_quote,
     spanned::Spanned,
-    DeriveInput, ExprLit, FnArg, ItemFn, ItemStruct, Lit, Pat, Result, Type,
+    Attribute, AttrStyle, DeriveInput, ExprLit, Field, FnArg, ItemFn, ItemStruct, Lit, Meta, MetaList, NestedMeta, Pat, Path, Result, Type,
+    Fields::Named,
 };
 
 fn impl_vtable(ast: DeriveInput) -> TokenStream {
@@ -34,43 +39,82 @@ pub fn vtable_derive(input: TokenStream) -> TokenStream {
     impl_vtable(ast)
 }
 
-#[proc_macro_attribute]
-pub fn has_vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let parsed: ItemStruct = syn::parse(item).unwrap();
-
-    let name = &parsed.ident;
-    let attrs = &parsed.attrs;
-    let fields = &parsed.fields.iter().collect::<Vec<_>>();
-    let vis = &parsed.vis;
-
-    let vtable = fields.iter().find(|field| {
-        if let Some(ident) = &field.ident {
-            return &ident.to_string() == "vtable";
-        }
-        false
-    });
-
-    if let Some(_) = vtable {
-        let gen = quote! {
-            #parsed
-        };
-
-        return gen.into();
-    }
-
-    // Adds #[repr(C)] so we don't accidentally fuck up the padding.
-    // Adds the necessary vtable field as first element
-    // In theory I could make this add a #[derive(VTable)] but that'd require parsing the attributes first
-    let gen = quote! {
-        #[repr(C)]
-        #(#attrs)*
-        #vis struct #name {
-            pub vtable: *mut *mut usize,
-            #(#fields),*
-        }
+fn add_vtable_field(item_struct: &mut ItemStruct) {
+    let fields = if let Named(fields) = &mut item_struct.fields {
+        fields
+    } else {
+        // todo: https://docs.rs/syn/1.0.11/syn/struct.Error.html
+        panic!("You can only decorate with #[has_vtable] a struct that has named fields.");
     };
 
-    gen.into()
+    let vtable_field = Field::parse_named
+        .parse2(quote! { pub vtable: *mut *mut usize })
+        .expect("internal macro error with ill-formatted vtable field");
+    
+    let struct_already_has_vtable_field = fields
+        .named
+        .iter()
+        .any(|f| f.ident == vtable_field.ident);
+
+    if struct_already_has_vtable_field {
+        return;
+    }
+
+    fields
+        .named
+        .insert(0, vtable_field);
+}
+
+fn has_repr_c(item_struct: &ItemStruct) -> bool {
+    // Look for existing #[repr(C)] variants, e.g.,
+    // #[repr(C)]
+    // #[repr(C, packed(4))]
+
+    let has = |meta: &Meta, ident| meta
+        .path()
+        .get_ident()
+        .map(|i| i.to_string() == ident)
+        .unwrap_or(false);
+
+    item_struct
+        .attrs
+        .iter()
+        .filter_map(|a| a
+            .parse_meta()
+            .ok()
+            .filter(|meta| has(meta, "repr"))
+            .and_then(|meta| match meta {
+                Meta::List(MetaList { nested, .. }) => Some(nested),
+                _ => None,
+            })
+        )
+        .flatten()
+        .any(|n| match n {
+            NestedMeta::Meta(meta) => has(&meta, "C"),
+            _ => false,
+        })
+}
+
+fn add_repr_c(item_struct: &mut ItemStruct) {
+    if has_repr_c(item_struct) {
+        return;
+    }
+
+    let mut repr_c = Attribute::parse_outer
+        .parse2(quote! { #[repr(C)] })
+        .expect("internal macro error with ill-formed #[repr(C)]");
+
+    item_struct
+        .attrs
+        .append(&mut repr_c);
+}
+
+#[proc_macro_attribute]
+pub fn has_vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut parsed: ItemStruct = parse_macro_input!(item as ItemStruct);
+    add_vtable_field(&mut parsed);
+    add_repr_c(&mut parsed);
+    parsed.into_token_stream().into()
 }
 
 #[derive(Debug)]
