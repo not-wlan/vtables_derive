@@ -109,7 +109,6 @@ impl EngineClient {
 
     #[virtual_index(113)]
     pub fn ClientCmd_Unrestricted(&self, command: *const c_char) {}
-
 }
 
 #[test]
