@@ -1,9 +1,16 @@
 #![warn(clippy::pedantic)]
 #![allow(dead_code)]
 
-use core::ptr;
+use core::{
+    ops::{Mul, Deref, Div},
+    ptr,
+};
 use static_assertions as sa;
-use std::os::raw::*;
+use std::{
+    borrow::Cow,
+    fmt::Display,
+    os::raw::*,
+};
 use vtables::VTable;
 use vtables_derive::{has_vtable, virtual_index, VTable};
 
@@ -12,6 +19,58 @@ use vtables_derive::{has_vtable, virtual_index, VTable};
 struct EngineClient {
     test_field: u64,
 }
+
+// ================================================================================================
+// These structures will fail to compile if #[derive(VTable)] does not respect
+// their generics.
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimes<'a, 'b, 'c> {
+    field_with_lifetime_a: Option<&'a u32>,
+    field_with_lifetime_b: Cow<'b, str>,
+    field_with_lifetime_c: &'c f64,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithTypeGenerics<T, U, V> {
+    t: T,
+    u: U,
+    v: V,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimesAndGenerics<'a, 'b, 'c, T, U, V: Clone> {
+    t: &'a T,
+    u: Option<&'b U>,
+    v: Cow<'c, V>,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimesAndGenericsAndVTableField<'a, 'b, 'c, T, U, V: Clone> {
+    t: &'a T,
+    u: Option<&'b U>,
+    vtable: usize,
+    v: Cow<'c, V>,
+}
+
+#[has_vtable]
+#[derive(VTable)]
+struct StructWithLifetimesAndGenericsAndVTableFieldAndWhereClause<'a, 'b, 'c, T, U, V>
+where
+    T: Mul + Div,
+    U: AsRef<str> + Copy,
+    V: Deref<Target=T> + Clone + Send + Sync + Display,
+{
+    t: &'a T,
+    u: Option<&'b U>,
+    vtable: usize,
+    v: Cow<'c, V>,
+}
+// ================================================================================================
 
 // This structure will fail to compile if #[has_vtable] added another `vtable` field.
 #[has_vtable]

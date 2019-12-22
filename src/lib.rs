@@ -12,15 +12,19 @@ use syn::{
     DeriveInput, ExprLit, FnArg, ItemFn, ItemStruct, Lit, Pat, Result, Type,
 };
 
-fn impl_vtable(ast: syn::DeriveInput) -> TokenStream {
-    let name = ast.ident;
+fn impl_vtable(ast: DeriveInput) -> TokenStream {
+    let DeriveInput { ident, generics, .. } = ast;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     let gen = quote! {
-        impl VTable for #name {
-            unsafe fn get_virtual<T: Sized>(&self, index: usize) -> T {
-                ((self.vtable as *mut *mut usize).add(index) as *const T).read()
+        impl #impl_generics VTable for #ident #ty_generics #where_clause {
+            unsafe fn get_virtual<__VirtualMethodType: Sized>(&self, index: usize) -> __VirtualMethodType {
+                let vtable = self.vtable as *const __VirtualMethodType;
+                vtable.add(index).read()
             }
         }
     };
+
     gen.into()
 }
 
