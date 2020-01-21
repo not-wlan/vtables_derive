@@ -1,5 +1,6 @@
 #![warn(clippy::pedantic)]
 #![allow(dead_code)]
+#![feature(abi_thiscall)]
 
 use core::{
     ops::{Mul, Deref, Div},
@@ -12,12 +13,23 @@ use std::{
     os::raw::*,
 };
 use vtables::VTable;
-use vtables_derive::{has_vtable, virtual_index, VTable};
+use vtables_derive::{has_vtable, virtual_index, VTable, dyn_glue, dyn_index};
 
 #[has_vtable]
 #[derive(VTable, Debug)]
 struct EngineClient {
     test_field: u64,
+}
+
+#[dyn_glue]
+trait EngineClientTrait {
+    #[doc = "abc"]
+    #[dyn_index(12)]
+    fn test_fn() -> usize;
+    #[dyn_index(2)]
+    fn test_fn_2() -> usize;
+    #[dyn_index(3)]
+    fn test_fn_3(t: usize);
 }
 
 // ================================================================================================

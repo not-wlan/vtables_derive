@@ -5,16 +5,12 @@ use crate::proc_macro::TokenStream;
 use quote::{
     quote,
     ToTokens,
+    format_ident
 };
 use std::ops::Deref;
-use syn::{
-    self,
-    parse::{Parse, Parser, ParseStream},
-    parse_macro_input,
-    spanned::Spanned,
-    Attribute, DeriveInput, ExprLit, Field, FnArg, ItemFn, ItemStruct, Lit, Meta, MetaList, NestedMeta, Pat, Result, Type,
-    Fields::Named,
-};
+use syn::{self, parse::{Parse, Parser, ParseStream}, parse_macro_input, spanned::Spanned, Attribute, DeriveInput, ExprLit, Field, FnArg, ItemFn, ItemStruct, Lit, Meta, MetaList, NestedMeta, Pat, Result, Type, Fields::Named, ItemTrait, TraitItem, Signature};
+
+
 
 fn impl_vtable(ast: DeriveInput) -> TokenStream {
     let DeriveInput { ident, generics, .. } = ast;
@@ -140,6 +136,95 @@ impl Parse for VirtualIndex {
     }
 }
 
+fn create_trait_object(item_trait: &mut ItemTrait) -> proc_macro2::TokenStream {
+    let mut methods = item_trait.items.iter().filter_map(|item| {
+        if let TraitItem::Method(method) = item {
+            // Find our pseudo-attribute to get the target index
+            let index = method.attrs.iter().find(|attr| {
+                attr.path.is_ident("dyn_index")
+            }).expect("Missing \"dyn_index\" attribute!");
+
+            return Some((&method.sig, index));
+        }
+        None
+    }).map(|(sig, index)| {
+        let group: proc_macro2::Group = syn::parse2(index.tokens.clone()).unwrap();
+        let lit : ExprLit = syn::parse2(group.stream()).unwrap();
+        let index = match lit.lit {
+            Lit::Int(int) => {
+                int.base10_parse::<usize>().ok()
+            },
+            _ => None
+        }.expect("Malformed vtable index");
+        (sig, index)
+    }).collect::<Vec<_>>();
+
+    // Order the indices correctly for later calculations.
+    // This is also required for dedup.
+    methods.sort_by_key(|(_, index)| *index);
+    let length = methods.len();
+    // Detect duplicated indices
+    methods.dedup_by_key(|(_, index)| *index);
+    assert_eq!(length, methods.len());
+    assert!(!methods.is_empty());
+
+    let (_, last_index) = methods.last().unwrap();
+    let methods = (0usize..=*last_index).map(|i| {
+        let ident = format_ident!("call_{}", i);
+        if let Some((signature, _)) = methods.iter().find(|(_, index)| i == *index) {
+            let argtys = get_arguments(signature);
+            let retty = &signature.output;
+
+            quote!{ #ident: extern "thiscall" fn(#(#argtys),*) #retty}
+        } else {
+            quote!{ #ident: extern "thiscall" fn(*mut ()) }
+        }
+    }).collect::<Vec<_>>();
+
+    let name = item_trait.ident.to_string();
+    let name = format_ident!("{}Vtable", name);
+
+    quote!{
+        struct #name {
+            dtor: extern "thiscall" fn(*mut ()),
+            size: usize,
+            align: usize,
+            #(#methods),*
+        }
+    }
+}
+
+#[proc_macro_attribute]
+pub fn dyn_index(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    // This is just a dummy handler so that the compiler shuts up.
+    // The actual parsing is done by `dyn_glue`
+    item
+}
+
+#[proc_macro_attribute]
+pub fn dyn_glue(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut parsed: ItemTrait = parse_macro_input!(item);
+    let vtable = create_trait_object(&mut parsed);
+    let mut stream = parsed.into_token_stream();
+    stream.extend(vtable);
+    stream.into()
+}
+
+fn get_arguments(sig: &Signature) -> Vec<Type> {
+    // A vector of all parameter types
+    sig
+        .inputs
+        .iter()
+        .flat_map(|arg| {
+            if let FnArg::Typed(pat) = arg {
+                return Some(pat.ty.deref().clone());
+            }
+            None
+        })
+        .collect()
+}
+
+
 #[proc_macro_attribute]
 pub fn virtual_index(attr: TokenStream, item: TokenStream) -> TokenStream {
     let index = parse_macro_input!(attr as VirtualIndex).index;
@@ -160,17 +245,7 @@ pub fn virtual_index(attr: TokenStream, item: TokenStream) -> TokenStream {
     // We need the types to define our new function and the names to call it.
     // The self parameter is being ignored here since it's way easier to just hardcode it in the quote!
 
-    // A vector of all parameter types
-    let argtys: Vec<Type> = sig
-        .inputs
-        .iter()
-        .flat_map(|arg| {
-            if let FnArg::Typed(pat) = arg {
-                return Some(pat.ty.deref().clone());
-            }
-            None
-        })
-        .collect();
+    let argtys = get_arguments(sig);
 
     // A vector of all parameter names
     let args = &sig
