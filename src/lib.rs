@@ -169,15 +169,20 @@ fn create_trait_object(item_trait: &mut ItemTrait) -> proc_macro2::TokenStream {
     assert!(!methods.is_empty());
 
     let (_, last_index) = methods.last().unwrap();
+
+    // Assign a method to every index in the range 0 => last index we've seen
     let methods = (0usize..=*last_index)
         .map(|i| {
+            // TODO: Generate identifiers from function names?
+            // TODO: Maybe mark the stub functions as unused with an underscore?
             let ident = format_ident!("call_{}", i);
             if let Some((signature, _)) = methods.iter().find(|(_, index)| i == *index) {
                 let argtys = get_arguments(signature);
                 let retty = &signature.output;
-
+                // TODO: re-use original ABI? Fail on generics?
                 quote! { #ident: extern "thiscall" fn(#(#argtys),*) #retty}
             } else {
+                // Generate dummy stub functions
                 quote! { #ident: extern "thiscall" fn(*mut ()) }
             }
         })
