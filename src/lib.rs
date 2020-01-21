@@ -2,18 +2,23 @@
 extern crate proc_macro;
 
 use crate::proc_macro::TokenStream;
-use quote::{
-    quote,
-    ToTokens,
-    format_ident
-};
+use quote::{format_ident, quote, ToTokens};
 use std::ops::Deref;
-use syn::{self, parse::{Parse, Parser, ParseStream}, parse_macro_input, spanned::Spanned, Attribute, DeriveInput, ExprLit, Field, FnArg, ItemFn, ItemStruct, Lit, Meta, MetaList, NestedMeta, Pat, Result, Type, Fields::Named, ItemTrait, TraitItem, Signature};
-
-
+use syn::{
+    self,
+    parse::{Parse, ParseStream, Parser},
+    parse_macro_input,
+    spanned::Spanned,
+    Attribute, DeriveInput, ExprLit, Field,
+    Fields::Named,
+    FnArg, ItemFn, ItemStruct, ItemTrait, Lit, Meta, MetaList, NestedMeta, Pat, Result, Signature,
+    TraitItem, Type,
+};
 
 fn impl_vtable(ast: DeriveInput) -> TokenStream {
-    let DeriveInput { ident, generics, .. } = ast;
+    let DeriveInput {
+        ident, generics, ..
+    } = ast;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let gen = quote! {
@@ -43,25 +48,19 @@ fn add_vtable_field(item_struct: &mut ItemStruct) {
     };
 
     let struct_already_has_vtable_field = fields
-    .named
-    .iter()
-    .any(|f| f
-        .ident
-        .as_ref()
-        .map_or(false, |i| i == "vtable")
-    );
-    
+        .named
+        .iter()
+        .any(|f| f.ident.as_ref().map_or(false, |i| i == "vtable"));
+
     if struct_already_has_vtable_field {
         return;
     }
-    
+
     let vtable_field = Field::parse_named
         .parse2(quote! { pub vtable: *mut *mut usize })
         .expect("internal macro error with ill-formatted vtable field");
 
-    fields
-        .named
-        .insert(0, vtable_field);
+    fields.named.insert(0, vtable_field);
 }
 
 fn has_repr_c(item_struct: &ItemStruct) -> bool {
@@ -69,23 +68,20 @@ fn has_repr_c(item_struct: &ItemStruct) -> bool {
     // #[repr(C)]
     // #[repr(C, packed(4))]
 
-    let has = |meta: &Meta, ident| meta
-        .path()
-        .get_ident()
-        .map_or(false, |i| i == ident);
+    let has = |meta: &Meta, ident| meta.path().get_ident().map_or(false, |i| i == ident);
 
     item_struct
         .attrs
         .iter()
-        .filter_map(|a| a
-            .parse_meta()
-            .ok()
-            .filter(|meta| has(meta, "repr"))
-            .and_then(|meta| match meta {
-                Meta::List(MetaList { nested, .. }) => Some(nested),
-                _ => None,
-            })
-        )
+        .filter_map(|a| {
+            a.parse_meta()
+                .ok()
+                .filter(|meta| has(meta, "repr"))
+                .and_then(|meta| match meta {
+                    Meta::List(MetaList { nested, .. }) => Some(nested),
+                    _ => None,
+                })
+        })
         .flatten()
         .any(|n| match n {
             NestedMeta::Meta(meta) => has(&meta, "C"),
@@ -102,9 +98,7 @@ fn add_repr_c(item_struct: &mut ItemStruct) {
         .parse2(quote! { #[repr(C)] })
         .expect("internal macro error with ill-formed #[repr(C)]");
 
-    item_struct
-        .attrs
-        .append(&mut repr_c);
+    item_struct.attrs.append(&mut repr_c);
 }
 
 #[proc_macro_attribute]
@@ -137,27 +131,33 @@ impl Parse for VirtualIndex {
 }
 
 fn create_trait_object(item_trait: &mut ItemTrait) -> proc_macro2::TokenStream {
-    let mut methods = item_trait.items.iter().filter_map(|item| {
-        if let TraitItem::Method(method) = item {
-            // Find our pseudo-attribute to get the target index
-            let index = method.attrs.iter().find(|attr| {
-                attr.path.is_ident("dyn_index")
-            }).expect("Missing \"dyn_index\" attribute!");
+    let mut methods = item_trait
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let TraitItem::Method(method) = item {
+                // Find our pseudo-attribute to get the target index
+                let index = method
+                    .attrs
+                    .iter()
+                    .find(|attr| attr.path.is_ident("dyn_index"))
+                    .expect("Missing \"dyn_index\" attribute!");
 
-            return Some((&method.sig, index));
-        }
-        None
-    }).map(|(sig, index)| {
-        let group: proc_macro2::Group = syn::parse2(index.tokens.clone()).unwrap();
-        let lit : ExprLit = syn::parse2(group.stream()).unwrap();
-        let index = match lit.lit {
-            Lit::Int(int) => {
-                int.base10_parse::<usize>().ok()
-            },
-            _ => None
-        }.expect("Malformed vtable index");
-        (sig, index)
-    }).collect::<Vec<_>>();
+                return Some((&method.sig, index));
+            }
+            None
+        })
+        .map(|(sig, index)| {
+            let group: proc_macro2::Group = syn::parse2(index.tokens.clone()).unwrap();
+            let lit: ExprLit = syn::parse2(group.stream()).unwrap();
+            let index = match lit.lit {
+                Lit::Int(int) => int.base10_parse::<usize>().ok(),
+                _ => None,
+            }
+            .expect("Malformed vtable index");
+            (sig, index)
+        })
+        .collect::<Vec<_>>();
 
     // Order the indices correctly for later calculations.
     // This is also required for dedup.
@@ -169,22 +169,24 @@ fn create_trait_object(item_trait: &mut ItemTrait) -> proc_macro2::TokenStream {
     assert!(!methods.is_empty());
 
     let (_, last_index) = methods.last().unwrap();
-    let methods = (0usize..=*last_index).map(|i| {
-        let ident = format_ident!("call_{}", i);
-        if let Some((signature, _)) = methods.iter().find(|(_, index)| i == *index) {
-            let argtys = get_arguments(signature);
-            let retty = &signature.output;
+    let methods = (0usize..=*last_index)
+        .map(|i| {
+            let ident = format_ident!("call_{}", i);
+            if let Some((signature, _)) = methods.iter().find(|(_, index)| i == *index) {
+                let argtys = get_arguments(signature);
+                let retty = &signature.output;
 
-            quote!{ #ident: extern "thiscall" fn(#(#argtys),*) #retty}
-        } else {
-            quote!{ #ident: extern "thiscall" fn(*mut ()) }
-        }
-    }).collect::<Vec<_>>();
+                quote! { #ident: extern "thiscall" fn(#(#argtys),*) #retty}
+            } else {
+                quote! { #ident: extern "thiscall" fn(*mut ()) }
+            }
+        })
+        .collect::<Vec<_>>();
 
     let name = item_trait.ident.to_string();
     let name = format_ident!("{}Vtable", name);
 
-    quote!{
+    quote! {
         struct #name {
             dtor: extern "thiscall" fn(*mut ()),
             size: usize,
@@ -212,8 +214,7 @@ pub fn dyn_glue(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn get_arguments(sig: &Signature) -> Vec<Type> {
     // A vector of all parameter types
-    sig
-        .inputs
+    sig.inputs
         .iter()
         .flat_map(|arg| {
             if let FnArg::Typed(pat) = arg {
@@ -223,7 +224,6 @@ fn get_arguments(sig: &Signature) -> Vec<Type> {
         })
         .collect()
 }
-
 
 #[proc_macro_attribute]
 pub fn virtual_index(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -236,14 +236,16 @@ pub fn virtual_index(attr: TokenStream, item: TokenStream) -> TokenStream {
     let vis = &parsed.vis;
     // A vector containing all attributes of this function
     let attrs = &parsed.attrs;
-    // A function signature in a trait or implementation: unsafe fn initialize(&self).
+    // A function signature in a trait or implementation: unsafe fn
+    // initialize(&self).
     let sig = &parsed.sig;
     // Return type of a function signature.
     let retty = &sig.output;
 
     // Separate the types from the names in the function parameters.
     // We need the types to define our new function and the names to call it.
-    // The self parameter is being ignored here since it's way easier to just hardcode it in the quote!
+    // The self parameter is being ignored here since it's way easier to just
+    // hardcode it in the quote!
 
     let argtys = get_arguments(sig);
 

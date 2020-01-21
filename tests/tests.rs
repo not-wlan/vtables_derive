@@ -3,17 +3,13 @@
 #![feature(abi_thiscall)]
 
 use core::{
-    ops::{Mul, Deref, Div},
+    ops::{Deref, Div, Mul},
     ptr,
 };
 use static_assertions as sa;
-use std::{
-    borrow::Cow,
-    fmt::Display,
-    os::raw::*,
-};
+use std::{borrow::Cow, fmt::Display, os::raw::*};
 use vtables::VTable;
-use vtables_derive::{has_vtable, virtual_index, VTable, dyn_glue, dyn_index};
+use vtables_derive::{dyn_glue, dyn_index, has_vtable, virtual_index, VTable};
 
 #[has_vtable]
 #[derive(VTable, Debug)]
@@ -75,7 +71,7 @@ struct StructWithLifetimesAndGenericsAndVTableFieldAndWhereClause<'a, 'b, 'c, T,
 where
     T: Mul + Div,
     U: AsRef<str> + Copy,
-    V: Deref<Target=T> + Clone + Send + Sync + Display,
+    V: Deref<Target = T> + Clone + Send + Sync + Display,
 {
     t: &'a T,
     u: Option<&'b U>,
@@ -84,10 +80,11 @@ where
 }
 // ================================================================================================
 
-// This structure will fail to compile if #[has_vtable] added another `vtable` field.
+// This structure will fail to compile if #[has_vtable] added another `vtable`
+// field.
 #[has_vtable]
 struct AlreadyHasVTableField<'a> {
-    vtable: u8, 
+    vtable: u8,
     foo: bool,
     bar: f32,
     baz: Option<&'a u8>,
@@ -112,7 +109,7 @@ impl EngineClient {
 
     #[virtual_index(5)]
     pub fn GetScreenSize(&self, width: *mut i32, height: *mut i32) {}
-    
+
     #[virtual_index(26)]
     pub fn IsInGame(&self) -> bool {}
 
@@ -131,8 +128,9 @@ fn has_vtable_adds_vtable_field() {
 
 #[test]
 fn derive_vtable_adds_get_virtual_method() {
-    // This function will fail to compile if #[derive(VTable)] did not add a `get_virtual(usize)` method.
-    
+    // This function will fail to compile if #[derive(VTable)] did not add a
+    // `get_virtual(usize)` method.
+
     let engine_client = EngineClient::default();
 
     let _f = |i| {
@@ -143,8 +141,9 @@ fn derive_vtable_adds_get_virtual_method() {
 
 #[test]
 fn virtual_index_retains_declared_methods() {
-    // This function will fail to compile if #[virtual_index(...)] fails to emit the method it decorates.
-    
+    // This function will fail to compile if #[virtual_index(...)] fails to emit the
+    // method it decorates.
+
     let engine_client = EngineClient::default();
 
     macro_rules! verify {
@@ -163,7 +162,10 @@ fn virtual_index_retains_declared_methods() {
     verify!(ClientCmd_Unrestricted, command);
 }
 
-fn new_vtable_with_one_function(function_index: usize, function_pointer: *mut usize) -> Vec<*mut usize> {
+fn new_vtable_with_one_function(
+    function_index: usize,
+    function_pointer: *mut usize,
+) -> Vec<*mut usize> {
     // [null, null, null, ..., function_pointer, null, ...]
     //   0     1     2          function_index   NUM_NULL_ENTRIES_AFTER_FUNCTION
     const NUM_NULL_ENTRIES_AFTER_FUNCTION: usize = 3;
@@ -193,7 +195,7 @@ fn call_void_virtual_method() {
     let mut width = 0;
     let mut height = 0;
     engine_client.GetScreenSize(&mut width, &mut height);
- 
+
     assert_eq!(width, WIDTH_ASSERT);
     assert_eq!(height, HEIGHT_ASSERT);
 }
@@ -210,7 +212,7 @@ fn call_virtual_method_to_return_internal_field() {
 
     let engine_client = EngineClient {
         vtable: vtable.as_mut_ptr(),
-        test_field: FIELD_ASSERT
+        test_field: FIELD_ASSERT,
     };
 
     assert_eq!(engine_client.GetTestField(), FIELD_ASSERT);
@@ -243,21 +245,22 @@ fn check_that_derive_vtable_adds_repr_c() {
     // To be honest, this test is flaky because it relies on struct layouts
     // whose stability I'm not familiar with across platforms, rustc versions, etc.
     // Ideally, there'd be a simpler way to just check if a struct is literally
-    // decorated with the #[repr(C)] attribute rather than going through this dance of looking for
-    // the effects of the attribute.
+    // decorated with the #[repr(C)] attribute rather than going through this dance
+    // of looking for the effects of the attribute.
 
     // Anyway, here's the theory:
     // If #[has_vtable] didn't add #[repr(C)] to the struct,
-    // then we'd expect to see the Rust compiler laying out the fields according to #[repr(rust)].
-    // This default layout should order the fields of the struct in decreasing alignment to minimize padding.
-    // With that knowledge, we can probe the struct using raw pointers to look for the unique values we initialize
-    // each field with.
+    // then we'd expect to see the Rust compiler laying out the fields according to
+    // #[repr(rust)]. This default layout should order the fields of the struct
+    // in decreasing alignment to minimize padding. With that knowledge, we can
+    // probe the struct using raw pointers to look for the unique values we
+    // initialize each field with.
     // https://github.com/rust-lang/rust/pull/37429
 
-    macro_rules! z { 
-        ($t:ty) => {{ 
-            core::mem::size_of::<$t>() 
-        }} 
+    macro_rules! z {
+        ($t:ty) => {{
+            core::mem::size_of::<$t>()
+        }};
     }
 
     {
@@ -267,7 +270,7 @@ fn check_that_derive_vtable_adds_repr_c() {
             somewhat_aligned: u16,
             most_aligned: u32,
         }
-        
+
         let control = Control {
             least_aligned: 42,
             somewhat_aligned: 2019,
@@ -301,7 +304,7 @@ fn check_that_derive_vtable_adds_repr_c() {
                 assert_eq!(*cursor, control.somewhat_aligned);
                 offset += z!(u16);
             }
-            
+
             {
                 let cursor: *const u8 = cursor.add(offset).cast();
                 assert_eq!(*cursor, control.least_aligned);
@@ -316,8 +319,9 @@ fn check_that_derive_vtable_adds_repr_c() {
     }
 
     // Great, those tests passed. So the theory is okay to work with.
-    // Now let's decorate a struct with #[has_vtable] to see if it has the #[repr(C)] attribute.
-    // We shouldn't see any of the struct fields moving from their declaration order.
+    // Now let's decorate a struct with #[has_vtable] to see if it has the
+    // #[repr(C)] attribute. We shouldn't see any of the struct fields moving
+    // from their declaration order.
 
     #[has_vtable]
     #[derive(VTable)]
@@ -367,26 +371,34 @@ fn check_that_derive_vtable_adds_repr_c() {
             assert_eq!(*cursor, control.somewhat_aligned);
             offset += z!(u16);
         }
-        
+
         {
             let cursor: *const u32 = cursor.add(offset).cast();
             assert_eq!(*cursor, control.most_aligned);
             offset += z!(u32);
         }
-        
+
         assert_eq!(z!(Control), offset);
     }
 
     // Sanity check on alignment ordering.
-    
-    macro_rules! a { 
-        ($t:ty) => {{ 
-            core::mem::align_of::<$t>() 
-        }} 
+
+    macro_rules! a {
+        ($t:ty) => {{
+            core::mem::align_of::<$t>()
+        }};
     }
 
     let alignments = [a!(u8), a!(u16), a!(u32)];
 
-    assert_eq!(*alignments.iter().min().unwrap(), a!(u8), "u8 should have the smallest alignment constraint.");
-    assert_eq!(*alignments.iter().max().unwrap(), a!(u32), "u32 should have the largest alignment constraint.");
+    assert_eq!(
+        *alignments.iter().min().unwrap(),
+        a!(u8),
+        "u8 should have the smallest alignment constraint."
+    );
+    assert_eq!(
+        *alignments.iter().max().unwrap(),
+        a!(u32),
+        "u32 should have the largest alignment constraint."
+    );
 }
